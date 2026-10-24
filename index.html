@@ -2589,7 +2589,7 @@ const STUDIO_RECORDINGS = {"tracks":[{"id":"hymn-to-the-dawn","cacheFile":"hymn-
   var $b=document.getElementById('snd'),$v=document.getElementById('vol');
   var AC=window.AudioContext||window.webkitAudioContext, supported=!!AC;
   var ctx=null,master=null,mix=null,reverb=null,breath=null,BANK={},impulseBuffer=null;
-  var bankReady=Promise.resolve(),waveCache={},recordBuffers={},recordLoads={},recordOffsets={};
+  var bankReady=Promise.resolve(),waveCache={},recordMedia={},recordLoads={},recordOffsets={};
   var sceneOperation=0;
   var session=null,retired=new Set(),timer=0,suspendTimer=0,operation=0,started=false;
   var enabled=false,volume=.35,error='',active=descriptor(null,'Исток');
@@ -2620,7 +2620,7 @@ const STUDIO_RECORDINGS = {"tracks":[{"id":"hymn-to-the-dawn","cacheFile":"hymn-
     started:started,waiting:enabled&&!started,volume:volume,muted:volume===0||!!document.hidden,
     supported:supported,error:error,contextState:ctx?ctx.state:'idle',track:publicTrack(active),
     liveVoices:session?session.voices.size:0,recordingPosition:session&&session.recording?
-      (session.offset+Math.max(0,ctx.currentTime-session.recordStart))%session.recordDuration:null};}
+      session.media.el.currentTime:null};}
   function notify(){
     var st=state();
     if($b){$b.classList.toggle('off',!st.playing);$b.classList.toggle('waiting',st.waiting);
@@ -2720,24 +2720,45 @@ const STUDIO_RECORDINGS = {"tracks":[{"id":"hymn-to-the-dawn","cacheFile":"hymn-
     });
     return Promise.all(tasks).then(function(){});
   }
+  // Записи играют потоком через <audio>, а не расшифровываются целиком:
+  // одиннадцать минут «Hymn to the Dawn» в AudioBuffer — это около 270 МБ,
+  // и на айфоне такая музыка вместе со страницей превышала память вкладки —
+  // Safari перезагружал сайт. Элемент держит в памяти лишь сжатый MP3.
+  function recordMediaFor(recording){
+    var m=recordMedia[recording.id];if(m)return m;
+    var el=document.createElement('audio');el.loop=true;el.preload='metadata';
+    // На сайте запись лежит отдельным файлом (recording.url), в одиночном HTML — внутри (recording.data).
+    if(recording.url)el.src=recording.url;
+    else{var raw=atob(recording.data),bytes=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+      el.src=URL.createObjectURL(new Blob([bytes],{type:recording.mime||'audio/mpeg'}));}
+    m={el:el,node:ctx.createMediaElementSource(el),owner:null,ready:false};
+    recordMedia[recording.id]=m;return m;
+  }
+  // Safari пускает звук элемента только из нажатия, поэтому все записи
+  // «отпираются» в том же нажатии, что включает музыку: короткий беззвучный
+  // запуск (узел ещё никуда не подключён) и пауза.
+  function unlockRecordings(){
+    if(typeof STUDIO_RECORDINGS==='undefined'||!STUDIO_RECORDINGS||!STUDIO_RECORDINGS.tracks)return;
+    STUDIO_RECORDINGS.tracks.forEach(function(recording){
+      try{var m=recordMediaFor(recording),played=m.el.play();
+        if(played&&played.then)played.then(function(){if(!m.owner)m.el.pause();},function(){});}catch(e){}
+    });
+  }
   function prepareTrack(p){
     var recording=recordingFor(p);if(!recording)return Promise.resolve();
-    if(recordBuffers[recording.id])return Promise.resolve();
+    var m=recordMediaFor(recording);if(m.ready)return Promise.resolve();
     if(recordLoads[recording.id])return recordLoads[recording.id];
-    var context=ctx;
-    recordLoads[recording.id]=(async function(){
-      var bytes;
-      // На сайте запись лежит отдельным файлом (recording.url), в одиночном HTML — внутри (recording.data).
-      if(recording.url){var res=await fetch(recording.url);if(!res.ok)throw new Error('Запись не загрузилась: '+recording.url);bytes=new Uint8Array(await res.arrayBuffer());}
-      else{var raw=atob(recording.data);bytes=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);}
-      var buffer=await context.decodeAudioData(bytes.buffer);
-      if(ctx===context)recordBuffers[recording.id]=buffer;
-    })().catch(function(e){delete recordLoads[recording.id];throw e;});
+    recordLoads[recording.id]=new Promise(function(resolve,reject){
+      function done(){m.ready=true;resolve();}
+      if(m.el.readyState>=1)return done();
+      m.el.addEventListener('loadedmetadata',done,{once:true});
+      m.el.addEventListener('error',function(){reject(new Error('Запись не загрузилась: '+recording.id));},{once:true});
+    }).catch(function(e){delete recordLoads[recording.id];throw e;});
     return recordLoads[recording.id];
   }
   function rememberRecording(s){
     if(!s||!s.recording||s.positionSaved)return;
-    recordOffsets[s.recording]=(s.offset+Math.max(0,ctx.currentTime-s.recordStart))%s.recordDuration;
+    recordOffsets[s.recording]=s.media.el.currentTime;
     s.positionSaved=true;
   }
   async function requestScene(p,fade){
@@ -2770,7 +2791,11 @@ const STUDIO_RECORDINGS = {"tracks":[{"id":"hymn-to-the-dawn","cacheFile":"hymn-
     reverb.connect(reverbHP);reverbHP.connect(reverbLP);reverbLP.connect(mix);
     breath=ctx.createBuffer(1,Math.floor(ctx.sampleRate*.6),ctx.sampleRate);
     var a=breath.getChannelData(0),r=seeded(740013);for(var i=0;i<a.length;i++)a[i]=(r()*2-1)*.5;
-    BANK={};waveCache={};recordBuffers={};recordLoads={};buildBank();bankReady=loadStudioBank();
+    // Узел элемента привязан к своему контексту навсегда: новому контексту — новые элементы.
+    Object.keys(recordMedia).forEach(function(id){var el=recordMedia[id].el;el.pause();
+      if(el.src.indexOf('blob:')===0)URL.revokeObjectURL(el.src);});
+    BANK={};waveCache={};recordMedia={};recordLoads={};buildBank();bankReady=loadStudioBank();
+    unlockRecordings();
     ctx.addEventListener('statechange',function(){
       // An OS interruption may resume at a different context time. Re-anchor
       // the score instead of replaying a backlog of missed notes.
@@ -2802,19 +2827,28 @@ const STUDIO_RECORDINGS = {"tracks":[{"id":"hymn-to-the-dawn","cacheFile":"hymn-
     if(session===s)session=null;
   }
   function newScene(p,fade){
-    var recording=recordingFor(p),recorded=recording&&recordBuffers[recording.id];
-    if(recording&&!recorded)throw new Error('Recording must be decoded before scene creation');
-    if(recorded){
+    var recording=recordingFor(p),media=recording&&recordMedia[recording.id];
+    if(recording&&!(media&&media.ready))throw new Error('Recording must be loaded before scene creation');
+    if(media){
       var recordedBus=ctx.createGain(),recordedBalance=ctx.createGain();
       recordedBus.gain.value=0;recordedBalance.gain.value=1.45;
       recordedBalance.connect(recordedBus);recordedBus.connect(master);
-      var offset=(recordOffsets[recording.id]||0)%recorded.duration,start=ctx.currentTime+.08;
+      var el=media.el,duration=el.duration,offset=recordOffsets[recording.id]||0;
+      if(isFinite(duration)&&duration>0)offset%=duration;
       var scene={p:p,bus:recordedBus,input:recordedBalance,wet:null,nodes:[recordedBus,recordedBalance],
-        voices:new Set(),queue:[],bar:0,nextBar:Infinity,dead:false,recording:recording.id,
-        offset:offset,recordStart:start,recordDuration:recorded.duration};
-      var voice=createVoice(scene,{role:'recording',pan:0},start),source=ctx.createBufferSource();
-      source.buffer=recorded;source.loop=true;source.connect(voice.gate);
-      voice.source(source,null,offset,start);ramp(recordedBus.gain,1,fade);return scene;
+        voices:new Set(),queue:[],bar:0,nextBar:Infinity,dead:false,recording:recording.id,media:media};
+      var voice=createVoice(scene,{role:'recording',pan:0},ctx.currentTime);
+      // Голос записи держит элемент, пока он его: остановка ждёт короткий спад
+      // громкости и не трогает элемент, если его уже подхватила новая сцена.
+      var handle={disconnect:function(){},stop:function(){
+        setTimeout(function(){if(media.owner!==handle)return;el.pause();disconnect(media.node);media.owner=null;},40);}};
+      disconnect(media.node);media.node.connect(voice.gate);media.owner=handle;
+      voice.sources.push(handle);voice.nodes.push(handle);voice.count++;
+      try{el.currentTime=offset;}catch(e){}
+      var played=el.play();
+      if(played&&played.catch)played.catch(function(){if(media.owner!==handle)return;
+        error='Нажмите кнопку музыки ещё раз, чтобы разрешить звук.';notify();});
+      ramp(recordedBus.gain,1,fade);return scene;
     }
     var bus=ctx.createGain(),filter=ctx.createBiquadFilter(),send=ctx.createGain(),balance=ctx.createGain();
     filter.type='lowpass';filter.frequency.value=p.filter;filter.Q.value=.45;
