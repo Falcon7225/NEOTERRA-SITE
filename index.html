@@ -962,9 +962,47 @@ function frameDraw(el){
   }
   svg.setAttribute('viewBox', '0 0 '+UW+' '+UH);
   svg.setAttribute('preserveAspectRatio', 'none');
-  svg.innerHTML = '<defs><image id="'+iL+'" href="'+f.L+'" width="'+f.vw+'" height="'+f.vh+'"/>'
-    + '<image id="'+iD+'" href="'+f.D+'" width="'+f.vw+'" height="'+f.vh+'"/></defs>'
+  svg.innerHTML = '<defs><use id="'+iL+'" href="#'+frSymbol(el.dataset.fr, 'L')+'" width="'+f.vw+'" height="'+f.vh+'"/>'
+    + '<use id="'+iD+'" href="#'+frSymbol(el.dataset.fr, 'D')+'" width="'+f.vw+'" height="'+f.vh+'"/></defs>'
     + '<g class="frl">'+L+'</g><g class="frd">'+D+'</g>';
+}
+// Рисунок рамки — живой векторной графикой в общем спрайте, а не <image> с
+// SVG-файлом. Каждый такой <image> движок Apple (Safari и любой браузер на
+// айфоне) держал отдельным документом с родным размером 3840×1280; на главной
+// их двадцать шесть, и вкладка падала при прокрутке к карточкам и при возврате
+// на главную. Символ строится один раз на рамку и тему; id внутри рисунка
+// получают приставку, чтобы листья одной рамки не подхватили листья другой.
+const frSymbols = {};
+function frSymbol(name, side){
+  const key = name + side;
+  if (frSymbols[key]) return frSymbols[key];
+  const id = 'frs' + (Object.keys(frSymbols).length + 1), uri = FRAMES[name][side];
+  const doc = new DOMParser().parseFromString(decodeURIComponent(uri.slice(uri.indexOf(',') + 1)), 'image/svg+xml');
+  const src = doc.documentElement, NS = 'http://www.w3.org/2000/svg';
+  let sprite = document.getElementById('fr-sprite');
+  if (!sprite){
+    sprite = document.createElementNS(NS, 'svg'); sprite.id = 'fr-sprite';
+    sprite.setAttribute('aria-hidden', 'true');
+    sprite.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden';
+    document.body.appendChild(sprite);
+  }
+  const re = (s) => s.replace(/url\(#([^)]+)\)/g, 'url(#' + id + '-$1)');
+  src.querySelectorAll('*').forEach(n => {
+    for (const a of Array.from(n.attributes)){
+      if (a.name === 'id') n.setAttribute('id', id + '-' + a.value);
+      else if ((a.name === 'href' || a.name === 'xlink:href') && a.value[0] === '#') n.setAttribute(a.name, '#' + id + '-' + a.value.slice(1));
+      else if (a.value.indexOf('url(#') >= 0) n.setAttribute(a.name, re(a.value));
+    }
+  });
+  const sym = document.createElementNS(NS, 'symbol');
+  sym.id = id;
+  sym.setAttribute('viewBox', src.getAttribute('viewBox') || ('0 0 ' + FRAMES[name].vw + ' ' + FRAMES[name].vh));
+  sym.setAttribute('preserveAspectRatio', src.getAttribute('preserveAspectRatio') || 'xMidYMid meet');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'style'])
+    if (src.hasAttribute(a)) sym.setAttribute(a, src.getAttribute(a));
+  while (src.firstChild) sym.appendChild(document.importNode(src.firstChild, true)), src.removeChild(src.firstChild);
+  sprite.appendChild(sym);
+  return frSymbols[key] = id;
 }
 // Рамки пересобираются при каждом изменении размера: дорисовалась картинка,
 // сменился шрифт, повернули телефон. Одна страница — одна рамка, главная — тринадцать.
