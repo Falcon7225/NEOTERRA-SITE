@@ -996,6 +996,7 @@ function frameDraw(el){
   for (const [cls, side] of [['frl', 'L'], ['frd', 'D']]) frRaster(el.dataset.fr, side).then(r => {
     box.querySelectorAll('.'+cls+' .frh').forEach((h, i) => {
       const src = i ? r.b : r.a;
+      h.style.borderWidth = src.w.map(px).join(' ');
       h.style.borderImage = 'url('+src.url+') '+src.slice+' fill / '+h.style.borderWidth+' stretch';
     });
   }, () => {});
@@ -1003,24 +1004,43 @@ function frameDraw(el){
 // Узор рамки один раз растрируется в две картинки-половины на тему
 // (FR_PPU точек на единицу рамки — с запасом на ретину и широкий экран).
 // Рисуется весь узор со сдвигом, без вырезания по исходным координатам.
-const FR_PPU = 3, frRasters = {};
+// Срез — один целый пиксель растра. Дробные границы (0,75 px на срез) Chrome
+// округлял так, что середина схлопывалась в ноль и линии между уголком и
+// медальоном пропадали. А срезы из build-frames у части рамок («Источники»,
+// «Космос», «Искусство») попадают на ромбик или завиток — растянутый, он
+// ложится толстой полосой. Поэтому рядом с ним (±FR_FIND единиц) берётся
+// столбец или ряд, через который проходит меньше всего узора, — одни линии.
+const FR_PPU = 3, FR_FIND = 8, frRasters = {};
 function frRaster(name, side){
   const key = name + side;
   if (frRasters[key]) return frRasters[key];
-  const f = FRAMES[name], img = new Image(), sp = (f.cl + f.cr + FR_S)/2;
+  const f = FRAMES[name], img = new Image(), P = FR_PPU;
   return frRasters[key] = new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; img.src = f[side]; })
-    .then(() => Promise.all([[0, sp, f.cl, sp - f.cl - FR_S], [sp, f.vw, f.cr - sp, f.vw - f.cr - FR_S]].map(([x0, x1, l, r]) => {
-      const c = document.createElement('canvas'), H = Math.round(f.vh*FR_PPU);
-      c.width = Math.round((x1 - x0)*FR_PPU); c.height = H;
-      c.getContext('2d').drawImage(img, -x0*FR_PPU, 0, f.vw*FR_PPU, H);
-      // Срез — целыми пикселями и не уже одного: дробные границы (0,75 px на срез)
-      // Chrome округляет так, что середина схлопывается в ноль и линии между
-      // уголком и медальоном пропадают.
-      const sp1 = Math.max(1, Math.round(FR_S*FR_PPU)), L = Math.round(l*FR_PPU), T = Math.round(f.cy*FR_PPU);
-      const slice = [T, c.width - L - sp1, H - T - sp1, L].join(' ');
-      return new Promise(done => c.toBlob(b => { c.width = c.height = 0; done({ url: URL.createObjectURL(b), slice }); }, 'image/png'));
-    })))
-    .then(([a, b]) => ({ a, b }));
+    .then(() => {
+      const full = document.createElement('canvas'), W = full.width = Math.round(f.vw*P), H = full.height = Math.round(f.vh*P);
+      const g = full.getContext('2d', { willReadFrequently: true });
+      g.drawImage(img, 0, 0, W, H);
+      const ink = g.getImageData(0, 0, W, H).data, at = (x, y) => ink[(y*W + x)*4 + 3] > 40;
+      const col = x => { let k = 0; for (let y = 0; y < H; y++) if (at(x, y)) k++; return k; };
+      const row = y => { let k = 0; for (let x = 0; x < W; x++) if (at(x, y)) k++; return k; };
+      const find = (v, lo, hi, count) => {
+        const c = Math.floor((v + FR_S/2)*P); let best = c, least = Infinity;
+        for (let d = 0; d <= FR_FIND*P; d++) for (const i of d ? [c - d, c + d] : [c]) {
+          if (i <= lo || i >= hi - 1) continue;
+          const k = count(i); if (k < least) { least = k; best = i; }
+        }
+        return best;
+      };
+      const T = find(f.cy, 0, H, row), X = Math.round((f.cl + f.cr + FR_S)/2*P);
+      return Promise.all([[0, X, f.cl], [X, W, f.cr]].map(([x0, x1, cut]) => {
+        const L = find(cut, x0, x1, col) - x0, c = document.createElement('canvas');
+        c.width = x1 - x0; c.height = H;
+        c.getContext('2d').drawImage(full, -x0, 0);
+        const slice = [T, c.width - L - 1, H - T - 1, L];
+        return new Promise(done => c.toBlob(b => { c.width = c.height = 0;
+          done({ url: URL.createObjectURL(b), slice: slice.join(' '), w: slice.map(v => v/P) }); }, 'image/png'));
+      })).then(([a, b]) => { full.width = full.height = 0; return { a, b }; });
+    });
 }
 // Рамки пересобираются при каждом изменении размера: дорисовалась картинка,
 // сменился шрифт, повернули телефон. Одна страница — одна рамка, главная — тринадцать.
