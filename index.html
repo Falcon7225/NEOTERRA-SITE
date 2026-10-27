@@ -1427,23 +1427,43 @@ function initMap(cv){
     if (nd.t==='page' && !nd.areas){ const a = byArea[nd.area]; if (a) addEdge(a.x,a.y,nd.x,nd.y,'twig',i,nd.area); }
     if (nd.areas) nd.areas.forEach(name => { const a = byArea[name]; if (a) addBridge(a, nd, i, name); });
   });
-  // Веточка к мосту идёт в обход чужих страниц: от медальона к просвету между
-  // секторами (страницы занимают 0,8 сектора), по нему наружу за все кольца и
-  // дугой по внешней орбите, на которой стоит мост. Ярче обычной — цветом луча.
+  // Веточка к мосту — живая нить, как гифа грибницы: идёт коротким путём от
+  // медальона к мосту, с лёгким своим изгибом, и мягко обтекает точки чужих
+  // страниц, оказавшиеся на пути, а не режет их. Путь — цепочка точек, которую
+  // точки страниц отталкивают, а сглаживание держит плавной; рисуется
+  // сплайном через середины звеньев. Ярче обычной веточки — цветом луча.
   function addBridge(a, nd, i, name){
-    const P = (t, r) => [Math.cos(t)*r, Math.sin(t)*r];
-    const th = Math.atan2(a.y, a.x), tb = Math.atan2(nd.y, nd.x), rb = Math.hypot(nd.x, nd.y);
-    let dt = tb - th; while (dt > Math.PI) dt -= 2*Math.PI; while (dt < -Math.PI) dt += 2*Math.PI;
-    const gap = th + Math.sign(dt)*Math.PI/DATA.areas.length, ra = Math.hypot(a.x, a.y) + 55;
-    const [gx, gy] = P(gap, ra), [ox, oy] = P(gap, rb);
-    addEdge(a.x, a.y, gx, gy, 'bridge', i, name, ...P((th + gap)/2, ra));
-    addEdge(gx, gy, ox, oy, 'bridge', i, name, (gx + ox)/2, (gy + oy)/2);
-    // дуга — кусками не больше 20°, у каждого куска изгиб на касательных
-    const arc = tb - gap - Math.round((tb - gap)/(2*Math.PI))*2*Math.PI;
-    const n = Math.max(1, Math.ceil(Math.abs(arc)/(Math.PI/9)));
-    for (let s = 0; s < n; s++){
-      const t0 = gap + arc*s/n, t1 = gap + arc*(s + 1)/n;
-      addEdge(...P(t0, rb), ...P(t1, rb), 'bridge', i, name, ...P((t0 + t1)/2, rb/Math.cos((t1 - t0)/2)));
+    const N = 28, CLEAR = 20, sway = 0.12*bow(i*7 + name.length)*2;
+    const dx = nd.x - a.x, dy = nd.y - a.y, len = Math.hypot(dx, dy) || 1, ux = -dy/len, uy = dx/len;
+    const pts = [];
+    for (let s = 0; s <= N; s++){
+      const t = s/N, b = Math.sin(Math.PI*t)*len*sway;
+      pts.push([a.x + dx*t + ux*b, a.y + dy*t + uy*b]);
+    }
+    const stones = nodes.filter(o => o !== nd && o !== a && (o.t === 'page' || o.t === 'area'))
+      .map(o => [o.x, o.y, o.t === 'area' ? 46 : CLEAR]);
+    // сначала сглаживание, потом отталкивание: последний шаг — за камнями
+    for (let it = 0; it < 80; it++){
+      for (let s = 1; s < N; s++){
+        const p = pts[s], q = pts[s - 1], r = pts[s + 1];
+        p[0] = p[0]*0.5 + (q[0] + r[0])*0.25; p[1] = p[1]*0.5 + (q[1] + r[1])*0.25;
+      }
+      for (let s = 2; s < N - 1; s++){
+        const p = pts[s];
+        for (const [ox, oy, c] of stones){
+          let vx = p[0] - ox, vy = p[1] - oy, d = Math.hypot(vx, vy);
+          if (d >= c) continue;
+          if (d < 0.01){ vx = ux; vy = uy; d = 1; }
+          p[0] += vx/d*(c - d)*0.6; p[1] += vy/d*(c - d)*0.6;
+        }
+      }
+    }
+    const mid = (p, q) => [(p[0] + q[0])/2, (p[1] + q[1])/2];
+    let from = pts[0];
+    for (let s = 1; s < N; s++){
+      const to = s === N - 1 ? pts[N] : mid(pts[s], pts[s + 1]);
+      addEdge(from[0], from[1], to[0], to[1], 'bridge', i, name, pts[s][0], pts[s][1]);
+      from = to;
     }
   }
   const qx=(e,t)=>(1-t)*(1-t)*e.ax+2*(1-t)*t*e.cx+t*t*e.bx;
