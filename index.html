@@ -1013,7 +1013,11 @@ function frRaster(name, side){
       const c = document.createElement('canvas'), H = Math.round(f.vh*FR_PPU);
       c.width = Math.round((x1 - x0)*FR_PPU); c.height = H;
       c.getContext('2d').drawImage(img, -x0*FR_PPU, 0, f.vw*FR_PPU, H);
-      const slice = [f.cy, r, f.vh - f.cy - FR_S, l].map(v => (v*FR_PPU).toFixed(2)).join(' ');
+      // Срез — целыми пикселями и не уже одного: дробные границы (0,75 px на срез)
+      // Chrome округляет так, что середина схлопывается в ноль и линии между
+      // уголком и медальоном пропадают.
+      const sp1 = Math.max(1, Math.round(FR_S*FR_PPU)), L = Math.round(l*FR_PPU), T = Math.round(f.cy*FR_PPU);
+      const slice = [T, c.width - L - sp1, H - T - sp1, L].join(' ');
       return new Promise(done => c.toBlob(b => { c.width = c.height = 0; done({ url: URL.createObjectURL(b), slice }); }, 'image/png'));
     })))
     .then(([a, b]) => ({ a, b }));
