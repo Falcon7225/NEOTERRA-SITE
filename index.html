@@ -927,6 +927,15 @@ function hydrate(){
     a.addEventListener('click', () => go('#/page/'+encodeURIComponent(a.dataset.wl))));
 }
 
+// Страница-мост (also) получает свою рамку, которой нет ни у одной области:
+// рисунки рамок её областей наложены друг на друга, а цвет переходит
+// градиентом — слева вторая область, справа своя. Раскладка (срезы, поля,
+// медальон) — от рамки своей области, рисунок второй растянут под неё.
+const frameOf = c => c.also && FRAMES[c.area] && FRAMES[c.also[0]] ? c.area + '+' + c.also[0] : c.area;
+Object.values(DATA.content).forEach(c => {
+  const k = frameOf(c);
+  if (k !== c.area && !FRAMES[k]) FRAMES[k] = Object.assign({}, FRAMES[c.area], { mix: c.also[0] });
+});
 // Рамки текста: стили ставятся один раз — data:-адрес рамки весит 5–8 КБ,
 // и вписывать его в каждую страницу при каждом переходе незачем. Всё, что
 // различается у рамок, уходит в переменные класса .frN; общая раскладка
@@ -1016,15 +1025,39 @@ function frameDraw(el){
 // ложится толстой полосой. Поэтому рядом с ним (±FR_FIND единиц) берётся
 // столбец или ряд, через который проходит меньше всего узора, — одни линии.
 const FR_FIND = 8, frRasters = {};
+// #RRGGBB → [оттенок°, насыщенность %, светлота %]
+function frHsl(hex){
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16)/255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn)/2, d = mx - mn;
+  if (!d) return [0, 0, l*100];
+  const s = d/(1 - Math.abs(2*l - 1));
+  const h = mx === r ? ((g - b)/d + 6) % 6 : mx === g ? (b - r)/d + 2 : (r - g)/d + 4;
+  return [h*60, s*100, l*100];
+}
 function frRaster(name, side, P){
   const key = name + side + P;
   if (frRasters[key]) return frRasters[key];
-  const f = FRAMES[name], img = new Image();
-  return frRasters[key] = new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; img.src = f[side]; })
-    .then(() => {
+  const f = FRAMES[name], m = f.mix && FRAMES[f.mix];
+  const load = src => new Promise((ok, fail) => { const img = new Image(); img.onload = () => ok(img); img.onerror = fail; img.src = src; });
+  return frRasters[key] = Promise.all(m ? [load(f[side]), load(m[side])] : [load(f[side])])
+    .then(imgs => {
       const full = document.createElement('canvas'), W = full.width = Math.round(f.vw*P), H = full.height = Math.round(f.vh*P);
       const g = full.getContext('2d', { willReadFrequently: true });
-      g.drawImage(img, 0, 0, W, H);
+      imgs.forEach(img => g.drawImage(img, 0, 0, W, H));
+      if (m){
+        // два рисунка уже наложены; перекрашиваем узор градиентом их цветов
+        // Переход идёт по кругу оттенков, а не напрямую: розовое с голубым,
+        // смешанные по прямой, дают в середине серость, а так — живой фиолет.
+        const tone = side === 'L' ? 'lc' : 'dc', grad = g.createLinearGradient(0, 0, W, 0);
+        const a = frHsl(m[tone]), b = frHsl(f[tone]);
+        let dh = b[0] - a[0]; if (dh > 180) dh -= 360; if (dh < -180) dh += 360;
+        for (let s = 0; s <= 6; s++){
+          const t = s/6;
+          grad.addColorStop(t, 'hsl(' + (a[0] + dh*t) + ',' + (a[1] + (b[1] - a[1])*t) + '%,' + (a[2] + (b[2] - a[2])*t) + '%)');
+        }
+        g.globalCompositeOperation = 'source-in'; g.fillStyle = grad; g.fillRect(0, 0, W, H);
+        g.globalCompositeOperation = 'source-over';
+      }
       const ink = g.getImageData(0, 0, W, H).data, at = (x, y) => ink[(y*W + x)*4 + 3] > 40;
       const col = x => { let k = 0; for (let y = 0; y < H; y++) if (at(x, y)) k++; return k; };
       const row = y => { let k = 0; for (let x = 0; x < W; x++) if (at(x, y)) k++; return k; };
@@ -1165,7 +1198,7 @@ function renderPage(slug){
   // Пометка остаётся на языке читателя, а русский текст под ней возвращается
   // влево: кириллица по правому краю выглядит не переводом, а поломкой.
   const body = (untr && isRTL(LANG)) ? '<div class="ltr">'+pgHtml(c)+'</div>' : pgHtml(c);
-  $app.innerHTML = framed(c.area, '<h1>'+esc(pgName(c))+'</h1>'
+  $app.innerHTML = framed(frameOf(c), '<h1>'+esc(pgName(c))+'</h1>'
     + '<div class="crumb">'+esc(areaNameOf(c.area))+' · Neoterra</div>'
     + '<div class="pgorn">❦</div>'
     + untr + body + backs);
