@@ -1406,11 +1406,12 @@ function initMap(cv){
   // beginPath на цвет дешевле, чем перебор всех рёбер ради каждого.
   const edgeGroups = {};
   function bow(i){ return (((i*2654435761)>>>0)%1000)/1000 - 0.5; }
-  function addEdge(ax,ay,bx,by,type,i,area){
+  // cx, cy — своя точка изгиба; без них изгиб детерминирован по индексу.
+  function addEdge(ax,ay,bx,by,type,i,area,cx,cy){
     const mx=(ax+bx)/2, my=(ay+by)/2, dx=bx-ax, dy=by-ay;
     const d = Math.hypot(dx,dy) || 1;
     const f = (type==='thread' ? 0.30 : 0.10) * bow(i)*2;
-    const e = {ax,ay,bx,by, cx:mx-dy/d*d*f, cy:my+dx/d*d*f, type, area,
+    const e = {ax,ay,bx,by, cx:cx ?? mx-dy/d*d*f, cy:cy ?? my+dx/d*d*f, type, area,
       rd:Math.max(Math.hypot(ax,ay),Math.hypot(bx,by))};
     edges.push(e);
     const g = type+'|'+area;
@@ -1423,9 +1424,28 @@ function initMap(cv){
   // (ядро→область) и веточки (область→страница): ~120 против ~1100.
   nodes.forEach((nd,i)=>{
     if (nd.t==='area') addEdge(0,0,nd.x,nd.y,'spoke',i,nd.area);
-    // веточки к мосту ярче обычных — цветом луча своей области
-    if (nd.t==='page') (nd.areas || [nd.area]).forEach(name => { const a = byArea[name]; if (a) addEdge(a.x,a.y,nd.x,nd.y,nd.areas?'bridge':'twig',i,name); });
+    if (nd.t==='page' && !nd.areas){ const a = byArea[nd.area]; if (a) addEdge(a.x,a.y,nd.x,nd.y,'twig',i,nd.area); }
+    if (nd.areas) nd.areas.forEach(name => { const a = byArea[name]; if (a) addBridge(a, nd, i, name); });
   });
+  // Веточка к мосту идёт в обход чужих страниц: от медальона к просвету между
+  // секторами (страницы занимают 0,8 сектора), по нему наружу за все кольца и
+  // дугой по внешней орбите, на которой стоит мост. Ярче обычной — цветом луча.
+  function addBridge(a, nd, i, name){
+    const P = (t, r) => [Math.cos(t)*r, Math.sin(t)*r];
+    const th = Math.atan2(a.y, a.x), tb = Math.atan2(nd.y, nd.x), rb = Math.hypot(nd.x, nd.y);
+    let dt = tb - th; while (dt > Math.PI) dt -= 2*Math.PI; while (dt < -Math.PI) dt += 2*Math.PI;
+    const gap = th + Math.sign(dt)*Math.PI/DATA.areas.length, ra = Math.hypot(a.x, a.y) + 55;
+    const [gx, gy] = P(gap, ra), [ox, oy] = P(gap, rb);
+    addEdge(a.x, a.y, gx, gy, 'bridge', i, name, ...P((th + gap)/2, ra));
+    addEdge(gx, gy, ox, oy, 'bridge', i, name, (gx + ox)/2, (gy + oy)/2);
+    // дуга — кусками не больше 20°, у каждого куска изгиб на касательных
+    const arc = tb - gap - Math.round((tb - gap)/(2*Math.PI))*2*Math.PI;
+    const n = Math.max(1, Math.ceil(Math.abs(arc)/(Math.PI/9)));
+    for (let s = 0; s < n; s++){
+      const t0 = gap + arc*s/n, t1 = gap + arc*(s + 1)/n;
+      addEdge(...P(t0, rb), ...P(t1, rb), 'bridge', i, name, ...P((t0 + t1)/2, rb/Math.cos((t1 - t0)/2)));
+    }
+  }
   const qx=(e,t)=>(1-t)*(1-t)*e.ax+2*(1-t)*t*e.cx+t*t*e.bx;
   const qy=(e,t)=>(1-t)*(1-t)*e.ay+2*(1-t)*t*e.cy+t*t*e.by;
 
