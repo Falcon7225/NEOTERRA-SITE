@@ -348,7 +348,7 @@ html[data-theme="paper"] .studio .primary-link{color:#fff6e3;background:var(--go
 .studio .search:focus{border-color:var(--gold)}
 .studio .cards{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:0}
 .studio .area-card{position:relative;display:flex;flex-direction:column;min-width:0;min-height:228px;padding:26px 30px 31px;border:1px solid var(--line);border-radius:3px;text-decoration:none;background:linear-gradient(145deg,var(--page),var(--page2));box-shadow:var(--soft-shadow);transition:background .2s,box-shadow .2s,transform .2s}
-.studio .area-card:hover{background:var(--card);box-shadow:0 10px 28px var(--halo);transform:translateY(-3px)}
+.studio .area-card:hover{background:linear-gradient(var(--card),var(--card));box-shadow:0 10px 28px var(--halo);transform:translateY(-3px)}
 .studio .area-card.frc{--fu:.48;border-color:transparent}
 .studio .area-card > :not(.fsvg){position:relative}
 .studio .area-card > .fsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
@@ -993,7 +993,11 @@ function frameDraw(el){
     svg.replaceWith(box);
   }
   box.innerHTML = layer('frl') + layer('frd');
-  for (const [cls, side] of [['frl', 'L'], ['frd', 'D']]) frRaster(el.dataset.fr, side).then(r => {
+  // Растр — ровно под экран (с шагом ¼): на карточках главной рамка идёт
+  // по 0,48 px на единицу, и картинка с запасом в 3 точки, ужатая вшестеро,
+  // теряла тонкие линии — до тех пор, пока наведение не перерисует карточку.
+  const ppu = Math.min(4, Math.max(.5, Math.round(u*dpr*4)/4));
+  for (const [cls, side] of [['frl', 'L'], ['frd', 'D']]) frRaster(el.dataset.fr, side, ppu).then(r => {
     box.querySelectorAll('.'+cls+' .frh').forEach((h, i) => {
       const src = i ? r.b : r.a;
       h.style.borderWidth = src.w.map(px).join(' ');
@@ -1002,7 +1006,7 @@ function frameDraw(el){
   }, () => {});
 }
 // Узор рамки один раз растрируется в две картинки-половины на тему
-// (FR_PPU точек на единицу рамки — с запасом на ретину и широкий экран).
+// (P точек на единицу рамки — столько, сколько её на экране, см. frameDraw).
 // Рисуется весь узор со сдвигом, без вырезания по исходным координатам.
 // Срез — один целый пиксель растра. Дробные границы (0,75 px на срез) Chrome
 // округлял так, что середина схлопывалась в ноль и линии между уголком и
@@ -1010,11 +1014,11 @@ function frameDraw(el){
 // «Космос», «Искусство») попадают на ромбик или завиток — растянутый, он
 // ложится толстой полосой. Поэтому рядом с ним (±FR_FIND единиц) берётся
 // столбец или ряд, через который проходит меньше всего узора, — одни линии.
-const FR_PPU = 3, FR_FIND = 8, frRasters = {};
-function frRaster(name, side){
-  const key = name + side;
+const FR_FIND = 8, frRasters = {};
+function frRaster(name, side, P){
+  const key = name + side + P;
   if (frRasters[key]) return frRasters[key];
-  const f = FRAMES[name], img = new Image(), P = FR_PPU;
+  const f = FRAMES[name], img = new Image();
   return frRasters[key] = new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; img.src = f[side]; })
     .then(() => {
       const full = document.createElement('canvas'), W = full.width = Math.round(f.vw*P), H = full.height = Math.round(f.vh*P);
